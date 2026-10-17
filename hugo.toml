@@ -1,0 +1,50 @@
+baseURL = "https://diggingdotit.github.io/"
+languageCode = "en-gb"
+title = "digging.it"
+theme = "PaperMod"
+enableRobotsTXT = true
+
+[params]
+  description = "Development diary, engineering notes and practical references."
+  defaultTheme = "auto"
+  ShowReadingTime = true
+  ShowPostNavLinks = true
+  ShowBreadCrumbs = true
+  ShowCodeCopyButtons = true
+  ShowToc = true
+
+  [params.homeInfoParams]
+    Title = "Digging into technology"
+    Content = "Development notes, practical references and lessons learned while building software."
+
+
+[taxonomies]
+  category = "categories"
+  tag = "tags"
+
+[permalinks]
+  diary = "/diary/:slug/"
+  reference = "/reference/:slug/"
+  articles = "/articles/:slug/"
+
+[menus]
+  [[menus.main]]
+    name = "Diary"
+    pageRef = "/diary"
+    weight = 10
+  [[menus.main]]
+    name = "Reference"
+    pageRef = "/reference"
+    weight = 20
+  [[menus.main]]
+    name = "Articles"
+    pageRef = "/articles"
+    weight = 30
+  [[menus.main]]
+    name = "Projects"
+    pageRef = "/projects"
+    weight = 40
+  [[menus.main]]
+    name = "About"
+    pageRef = "/about"
+    weight = 50
