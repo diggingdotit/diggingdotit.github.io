@@ -75,3 +75,15 @@ summary: "Adding compiled-binary E2E tests, migrating defaults to Gemini 4, hard
 * **Dependabot for SHA-Pinned Actions:** Added `.github/dependabot.yml` targeting `development` weekly on Mondays at `09:00` (`Europe/London` IANA timezone for automatic GMT/BST transitions) with grouped `github-actions` updates; merged to `main` to activate Dependabot and auto-close Issue `#9`.
 * **Verified Commit & Tag Signatures:** Diagnosed GitHub's `Unverified` commit badge (`reason: "unknown_key"`) via `gh api` — GitHub keeps SSH Authentication Keys and Signing Keys separate. Registering the SSH public key as a GitHub **Signing Key** retroactively flipped all signed commits and release tags to green **Verified**.
 * **Docs & Quickstart Consolidation:** Removed remaining placeholder URLs across `README.md` and `SPECIFICATION.md`, merged **Pre-Compiled Binary Releases & SHA256 Verification** into the top Quickstart section, and kept standard zero-dependency `curl -fsSLO` as the primary download method so end users never need `gh` installed.
+
+---
+
+## 8. Diary Workflow, Global Git Hygiene & `v0.9.0` Direction
+
+* **Separating Ephemeral Checkpoints from Long-Term Diaries:** Decided to treat `CHECKPOINT.md` and developer diaries differently by lifespan:
+  * **`CHECKPOINT.md`** stays local inside the project repo (unversioned, excluded via `.git/info/exclude` and `~/.gitignore.global`) — it is disposable session glue easily reconstructed from `git log` and GitHub Issues.
+  * **Developer diary entries** move out of `gemtop` into this Hugo (`PaperMod`) repository under `content/diary/`, keeping the code repo clean and ready to open-source while giving long-term notes proper version history and off-site backup.
+* **Local-First Hugo Publishing Flow:** Draft and iterate locally in VS Code on a `development` branch with `draft: true` and instant live reload via `hugo server -D` (`http://localhost:1313`). Because the blog repo is public, rough/unscrubbed commits stay local until scrubbed and ready to publish (`draft: false` → push `development` → fast-forward merge to `main` → GitHub Pages).
+* **Global `.gitignore` Hardening:** Tightened `~/.gitignore.global` for macOS resource forks (`._*`), `.env.*` (with `!.env.example`), extra cert/key formats (`*.p12`, `*.pfx`, `id_ed25519`, `id_rsa`), editor swap files, and `CHECKPOINT.md`, keeping language and build outputs strictly in per-repo `.gitignore` files.
+* **Looking Ahead (`v0.9.0` — Issue `#5`):** Designed a clean, zero-dependency way for `gemtop` to track live Antigravity usage alongside proxied API traffic via a passive `-watch-antigravity` transcript tailer reading documented `transcript.jsonl` files (`input_tokens`, `cache_read_tokens`, `output_tokens`) across Gemini and Claude sessions — no process scraping and no synchronous hook overhead.
+
