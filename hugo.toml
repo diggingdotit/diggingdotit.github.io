@@ -15,7 +15,7 @@ enableRobotsTXT = true
 
   [params.homeInfoParams]
     Title = "Digging into technology"
-    Content = "Development notes, practical references and lessons learned while building software."
+    Content = "Development notes, practical references and lessons learned while building software with AI."
 
 
 [taxonomies]

@@ -6,7 +6,7 @@ ShowReadingTime: false
 ShowPostNavLinks: false
 ---
 
-**digging.it** is a development diary, collection of engineering notes, and set of practical references written while building software.
+**digging.it** is a development diary, collection of engineering notes, and set of practical references written while building software with AI.
 
 ## What's Here
 
