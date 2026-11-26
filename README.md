@@ -5,9 +5,9 @@ Source repository for [digging.it](https://diggingdotit.github.io/) — a develo
 ## Repository Layout
 
 - `content/diary/` — Development diary entries and takeaways
-- `content/reference/` — Practical technical references
+- `content/reference/` — Practical technical notes, checklists, and curated links (articles, videos, tools, products)
 - `content/articles/` — Longer-form write-ups
-- `content/projects/` — Project pages
+- `content/projects/` — GitHub projects index and project pages
 - `hugo.toml` — Site configuration, menus, and permalinks
 - `.markdownlint.json` — Shared Markdown Lint rules (used by VS Code and GitHub Actions)
 - `.github/workflows/pages.yml` — Lint, build, and GitHub Pages deployment pipeline
