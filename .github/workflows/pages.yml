@@ -24,6 +24,7 @@ jobs:
         uses: DavidAnson/markdownlint-cli2-action@3ce8f712b5d8f31acd8e201be6d97e3d2bb23eb7 # v25.1.0
         with:
           globs: |
+            README.md
             content/**/*.md
 
   build:
