@@ -1,89 +1,94 @@
 ---
-title: "gemtop v0.8.4–v0.8.5: Binary E2E Tests, Gemini 4 Defaults, Free CI Security Gates & Stale-Model Pruning"
+title: "gemtop v0.8.4–v0.8.5: Binary E2E Tests, Gemini 4 & CI Security"
 slug: "gemtop-gemini-4-security-v0-8-5"
 date: 2026-11-25T23:03:00Z
-draft: true
+draft: false
 categories: ["Diary"]
 tags: ["gemtop", "golang", "testing", "security", "github-actions", "gemini-4"]
-summary: "Adding compiled-binary E2E tests, migrating defaults to Gemini 4, hardening GitHub Actions with free security scanners and SHA pinning, pruning stale models in v0.8.5, and automating workflow updates with Dependabot."
+summary: "Two gemtop releases covering compiled-binary E2E tests, Gemini 4 defaults, free CI security scanners, stale-model pruning, and a cleaner dev diary workflow."
 ---
 
-**Project:** `gemtop` (`v0.8.4` → `v0.8.5`)  
-**Focus:** Test Architecture (`tests/`), Compiled-Binary E2E Suite, Gemini 4 Migration, Hardened CI/Security Pipeline, Stale-Model Pruning & Verified Releases
+A packed session on `gemtop` spanning two releases (`v0.8.4` and `v0.8.5`). What started as a pass over test coverage and Gemini 4 defaults turned into a broader round of CI security hardening, a real UX bug caught during local smoke testing, and a clean-up of how I publish these dev notes.
 
----
+## Test Layout & Binary E2E Coverage
 
-## 1. Pragmatic Engineering Decisions (Solo Repo Lens)
+I started by trimming some self-inflicted friction from the repo layout. For a solo, zero-dependency Go project, keeping a `Makefile` around was mostly root clutter — local shell aliases handle my shortcuts, and Go's native toolchain keeps CI simple. I also renamed `test/` to `tests/integration_test.go` to avoid ambiguity with the Unix `test` built-in and to separate in-process integration tests from full binary end-to-end tests.
 
-* **Dropped `Makefile`:** Re-evaluated build automation for a solo zero-dependency Go repo — local shell aliases handle shortcuts with zero root clutter while Go's native toolchain keeps CI minimal.
-* **Renamed `test/` → `tests/integration_test.go`:** Avoided any Unix `test` built-in ambiguity and accurately distinguished in-process multi-package integration tests from true compiled-binary E2E tests.
+Running cross-package coverage (`go test -coverpkg=./...`) highlighted a clear blind spot: the core packages sat between 75% and 100%, while `cmd/gemtop/main.go` was at `0.0%` alongside two production config helpers (`ResolveStateFilePath` and `GetProfileAPIKey`).
 
----
+To close that gap, I added table-driven unit tests for the config helpers in `internal/config` and a new compiled-binary suite in `tests/e2e_test.go` (`TestBinaryE2E`). The E2E test builds `./cmd/gemtop` into an isolated `t.TempDir()` and exercises the actual CLI end to end:
 
-## 2. Closing Coverage Blind Spots
+- `-v` version output and `-plain` stdout logging
+- Real loopback HTTP proxying alongside `main.go`'s Host, Origin, and Fetch-Metadata guards
+- `-port` collision behaviour vs `-auto-port` fallback
+- Graceful `SIGINT` shutdown and state flushing to disk
 
-* **The Discovery:** Cross-package coverage (`go test -coverpkg=./...`) showed strong core engine coverage (75–100%), but `cmd/gemtop/main.go` sat at `0.0%` alongside two production config helpers (`ResolveStateFilePath` and `GetProfileAPIKey`).
-* **The Solution:**
-  * Added **`tests/e2e_test.go` (`TestBinaryE2E`)** compiling `./cmd/gemtop` into an isolated `t.TempDir()` and exercising `-v`, real loopback HTTP proxying, `main.go`'s Host/Origin/Fetch-Metadata guards, `-port` collision vs `-auto-port` fallback, `-plain` stdout logging, and graceful `SIGINT` disk state flushing.
-  * Added table-driven unit tests for `ResolveStateFilePath` and `GetProfileAPIKey` in `internal/config/config_test.go`.
+## Gemini 4 Defaults & Two Quiet Bugs
 
----
+Next, I moved the embedded defaults (`DefaultConfigJSON`) off Gemini 3.x and onto the Gemini 4 lineup (`gemini-4-hydrogen`, `gemini-4-neon`, `gemini-4-argon`, `gemini-4-carbon`), raising the model drift detector baseline from `3` to `4`. I also updated `README.md` examples to `gemini-4-neon` and linked Google AI Studio's live Rate Limits dashboard.
 
-## 3. Gemini 4 Migration & Bug Fixes
+While working through the config and proxy tests, two subtle bugs turned up:
 
-* **Gemini 4 Lineup:** Updated embedded defaults (`DefaultConfigJSON`) from Gemini 3.x to the current Gemini 4 element codenames (`gemini-4-hydrogen`, `gemini-4-neon`, `gemini-4-argon`, `gemini-4-carbon`), raising the drift detector baseline from `3` → `4`. Updated `README.md` examples to `gemini-4-neon` and linked Google AI Studio's live Rate Limits dashboard.
-* **Bug #1 (`AllowedHosts` merge):** Fixed `internal/config/config.go` where `append(userCfg.AllowedHosts, userCfg.AllowedHosts...)` overwrote default loopback hosts and duplicated user entries; added a regression assertion in `TestLoadAppConfigUserFileOverlay`.
-* **Bug #2 (Latent test race & nil-deref):** Fixed `TestNewGatewayReverseProxyRewrite` to drain `resp.Body` before closing (so the stream tap deterministically records metrics) and guard against nil dereference; verified 10/10 runs with `-race`.
+- **`AllowedHosts` merge bug:** `internal/config/config.go` was running `append(userCfg.AllowedHosts, userCfg.AllowedHosts...)`, overwriting the default loopback hosts while duplicating user entries. Fixed and locked down with a regression test.
+- **Latent race & nil-deref in proxy tests:** The reverse-proxy rewrite test wasn't draining `resp.Body` before closing it, making stream-tap metric recording non-deterministic, and lacked a nil guard. Fixed and verified across 10/10 runs with `-race`.
 
----
+## CI Hardening & v0.8.4
 
-## 4. CI/Release Hardening & `v0.8.4` Release
+Before tagging a release, I brought `ci.yml` and `release.yml` up to scratch:
 
-* Upgraded `ci.yml` and `release.yml` off EOL Go `1.23` to `go-version: 'stable'` so compiled proxy binaries always receive current Go stdlib HTTP/TLS security patches.
-* Enabled CI on `development` pushes/PRs, added `concurrency` cancellation (preserving 10× macOS Actions minutes on private repos), least-privilege `permissions`, `gofmt` gate, and a tag-vs-binary version guard in `release.yml`.
-* Bumped SemVer to **`v0.8.4`**, merged `development` → `main`, and published signed tag `v0.8.4`.
-* Smoke-tested the compiled local binary and spotted a real UX issue: old `~/.gemtop-state.json` models from previous days were reappearing on launch with zero traffic.
+- Moved off EOL Go `1.23` to `go-version: 'stable'` so compiled proxy binaries pick up current Go stdlib HTTP/TLS security fixes.
+- Enabled CI on `development` pushes and PRs, added `concurrency` cancellation (helpful on private repos where macOS Actions minutes burn at 10×), tightened workflow `permissions`, and added both a `gofmt` check and a tag-vs-binary version guard in `release.yml`.
 
----
+With that in place, I bumped SemVer to `v0.8.4`, merged `development` into `main`, and pushed the signed release tag. Smoke-testing the compiled binary immediately paid off — it surfaced a real UX annoyance where models from previous days' `~/.gemtop-state.json` were reappearing on startup with zero traffic.
 
-## 5. Free Private-Repo Security Pipeline & Spec Sync
+## Free CI Security & Spec Sync
 
-* **Security Workflow (`.github/workflows/security.yml`):** Because GitHub CodeQL and native Secret Scanning require paid GitHub Advanced Security on private repos, added an `ubuntu-latest`-only workflow (push/PR + weekly Monday 06:00 UTC cron) running `govulncheck`, `gosec`, and `gitleaks` (via canonical `github.com/zricethezav/gitleaks/v8`).
-* **Supply-Chain Pinning:** Pinned all GitHub Actions across `ci.yml`, `release.yml`, and `security.yml` to immutable 40-char commit SHAs (upgrading `softprops/action-gh-release` to `v3.0.4` on Node 24).
-* **Audited Findings:**
-  * Added justified inline `// #nosec` comments (`G103`, `G304`, `G117` for atomic `0600` local `~/.gemtop.json` saves).
-  * Verified all 3 historical `gitleaks` matches were a dummy test string (zero real secrets in history) and added `.gitleaksignore` restricted strictly to those 3 fingerprints.
-* **Spec & Code Sync:** Audited `SPECIFICATION.md` end-to-end, brought Sections 2, 4, 6, 8, and 16.5 into full alignment with the `internal/` packages and v4 baseline, and updated the defensive fallback in `internal/tui/tui.go` (`3` → `4`).
+GitHub's native CodeQL and Secret Scanning require paid GitHub Advanced Security (GHAS) on private repositories, so I put together a lightweight `ubuntu-latest`-only workflow (`.github/workflows/security.yml`) that runs on pushes, PRs, and a weekly Monday `06:00 UTC` schedule using:
 
----
+- `govulncheck` for known Go vulnerabilities
+- `gosec` for static security analysis
+- `gitleaks` (canonical `zricethezav/gitleaks/v8`) for secret detection
 
-## 6. Stale Model Pruning, Clear Disk Flush & `v0.8.5` Release
+At the same time, I pinned every GitHub Action across `ci.yml`, `release.yml`, and `security.yml` to immutable 40-character commit SHAs, bumping `softprops/action-gh-release` to `v3.0.4` on Node 24. Auditing the initial scan findings was clean: I added justified inline `// #nosec` annotations (`G103`, `G304`, and `G117` for atomic `0600` local config saves), confirmed that all three historical `gitleaks` hits were a single dummy test string, and scoped `.gitleaksignore` strictly to those three fingerprints.
 
-* **The Problem:** `stats.LoadDiskState` repopulated every historical model key saved in `~/.gemtop-state.json` on startup even from previous days, and pressing `[c]` in the TUI only cleared sliding windows without removing models or flushing to disk.
-* **The Solution:**
-  * Updated `stats.LoadDiskState` to start with a clean daily slate whenever `disk.Date != todayStr` (Pacific Time) and skip zero-RPD ghost models on same-day loads.
-  * Added `GatewayState.Reset()` + `OnClear func()` callback wired in `cmd/gemtop/main.go` so `[c]` clears tracked models, rolling windows, and status totals and immediately flushes the clean state to disk.
-  * Added the `-reset-state` CLI flag to start fresh and overwrite any persisted state file on launch.
-  * Added unit tests (`TestLoadDiskStatePrunesPreviousDayModels`, `TestLoadDiskStateSkipsZeroRPDModelsSameDay`, `TestGatewayStateReset`) and compiled-binary E2E coverage (`TestBinaryE2E/reset_state_flag`).
-  * Bumped SemVer to **`v0.8.5`**, verified CI + Security green, merged `development` → `main` (auto-closing Issue `#4`), and pushed signed release tag **`v0.8.5`**.
+I also did an end-to-end pass over `SPECIFICATION.md` so Sections 2, 4, 6, 8, and 16.5 match the `internal/` layout and v4 baseline, and updated a leftover defensive `3` → `4` fallback in `internal/tui/tui.go`.
 
----
+## Pruning Stale Models in v0.8.5
 
-## 7. GitHub CLI, Dependabot, Verified Signatures & Quickstart Polish
+With CI security green, I came back to the stale-model issue spotted after `v0.8.4`. On startup, `stats.LoadDiskState` repopulated every model key saved in `~/.gemtop-state.json` even from earlier days, and pressing `[c]` in the TUI only cleared the rolling windows without dropping models or writing the cleared state back to disk.
 
-* **Standalone GitHub CLI (`gh`):** Installed the standalone macOS `arm64` Go `gh` binary (zero external dependencies), verified the `v0.8.5` GitHub Release assets (4 cross-compiled binaries + `checksums.txt`), and created the next roadmap issues (`#5`–`#9`).
-* **Dependabot for SHA-Pinned Actions:** Added `.github/dependabot.yml` targeting `development` weekly on Mondays at `09:00` (`Europe/London` IANA timezone for automatic GMT/BST transitions) with grouped `github-actions` updates; merged to `main` to activate Dependabot and auto-close Issue `#9`.
-* **Verified Commit & Tag Signatures:** Diagnosed GitHub's `Unverified` commit badge (`reason: "unknown_key"`) via `gh api` — GitHub keeps SSH Authentication Keys and Signing Keys separate. Registering the SSH public key as a GitHub **Signing Key** retroactively flipped all signed commits and release tags to green **Verified**.
-* **Docs & Quickstart Consolidation:** Removed remaining placeholder URLs across `README.md` and `SPECIFICATION.md`, merged **Pre-Compiled Binary Releases & SHA256 Verification** into the top Quickstart section, and kept standard zero-dependency `curl -fsSLO` as the primary download method so end users never need `gh` installed.
+The fix touched three places:
 
----
+- Updated `stats.LoadDiskState` to start with a clean daily slate whenever the saved Pacific Time date differs from today, and to skip zero-RPD ghost entries on same-day loads.
+- Added `GatewayState.Reset()` and wired an `OnClear` callback in `cmd/gemtop/main.go` so pressing `[c]` clears tracked models, rolling windows, and status totals and immediately flushes the clean state to disk.
+- Added a `-reset-state` CLI flag to launch fresh and overwrite any persisted state file.
 
-## 8. Diary Workflow, Global Git Hygiene & `v0.9.0` Direction
+After adding unit tests and an E2E check for `-reset-state`, I bumped to `v0.8.5`, verified CI and Security green, merged `development` → `main` (closing Issue `#4`), and pushed signed tag `v0.8.5`.
 
-* **Separating Ephemeral Checkpoints from Long-Term Diaries:** Decided to treat `CHECKPOINT.md` and developer diaries differently by lifespan:
-  * **`CHECKPOINT.md`** stays local inside the project repo (unversioned, excluded via `.git/info/exclude` and `~/.gitignore.global`) — it is disposable session glue easily reconstructed from `git log` and GitHub Issues.
-  * **Developer diary entries** move out of `gemtop` into this Hugo (`PaperMod`) repository under `content/diary/`, keeping the code repo clean and ready to open-source while giving long-term notes proper version history and off-site backup.
-* **Local-First Hugo Publishing Flow:** Draft and iterate locally in VS Code on a `development` branch with `draft: true` and instant live reload via `hugo server -D` (`http://localhost:1313`). Because the blog repo is public, rough/unscrubbed commits stay local until scrubbed and ready to publish (`draft: false` → push `development` → fast-forward merge to `main` → GitHub Pages).
-* **Global `.gitignore` Hardening:** Tightened `~/.gitignore.global` for macOS resource forks (`._*`), `.env.*` (with `!.env.example`), extra cert/key formats (`*.p12`, `*.pfx`, `id_ed25519`, `id_rsa`), editor swap files, and `CHECKPOINT.md`, keeping language and build outputs strictly in per-repo `.gitignore` files.
-* **Looking Ahead (`v0.9.0` — Issue `#5`):** Designed a clean, zero-dependency way for `gemtop` to track live Antigravity usage alongside proxied API traffic via a passive `-watch-antigravity` transcript tailer reading documented `transcript.jsonl` files (`input_tokens`, `cache_read_tokens`, `output_tokens`) across Gemini and Claude sessions — no process scraping and no synchronous hook overhead.
+## Dependabot, Verified Commits & Docs
 
+Once `v0.8.5` was out, I tidied up the surrounding release and repo hygiene:
+
+- **Standalone `gh` CLI:** Installed the standalone macOS `arm64` Go binary (no external dependencies), verified the `v0.8.5` release assets (four cross-compiled binaries plus `checksums.txt`), and opened the next batch of roadmap issues (`#5`–`#9`).
+- **Dependabot for SHA-pinned actions:** Added `.github/dependabot.yml` targeting `development` weekly on Mondays at `09:00` (`Europe/London` so GMT/BST shifts happen automatically) with grouped `github-actions` updates, then merged to `main` to activate it and close Issue `#9`.
+- **Green Verified badges:** Checked via `gh api` why my SSH-signed commits showed as `Unverified` (`reason: "unknown_key"`). GitHub keeps Authentication Keys and Signing Keys separate — registering the same SSH public key as a **Signing Key** retroactively flipped every signed commit and release tag to green **Verified**.
+- **Quickstart polish:** Cleared out remaining placeholder URLs in `README.md` and `SPECIFICATION.md`, folded pre-compiled binaries and SHA256 verification into the top Quickstart section, and kept plain `curl -fsSLO` as the primary install path so end users never need `gh`.
+
+## Diary Workflow, Git Hygiene & v0.9.0
+
+Finally, I split session notes from long-term writing based on lifespan:
+
+- **`CHECKPOINT.md`** stays local and unversioned inside the project repo (excluded via `.git/info/exclude` and `~/.gitignore.global`) — it's disposable session glue that can always be rebuilt from `git log` and GitHub Issues.
+- **Dev diary entries** now live here in this Hugo (`PaperMod`) repo under `content/diary/`, keeping the `gemtop` codebase clean for open-sourcing while giving long-term notes proper git history and backup.
+
+Because this blog repo is public, my local-first flow is to draft on `development` with `draft: true`, preview with `hugo server -D` (`http://localhost:1313`), and only push and fast-forward merge to `main` once an entry is scrubbed and set to `draft: false`. Along the way I also tightened `~/.gitignore.global` for macOS resource forks (`._*`), `.env.*` (keeping `!.env.example`), extra key/cert formats (`*.p12`, `*.pfx`, `id_ed25519`, `id_rsa`), editor swap files, and `CHECKPOINT.md`, leaving language and build artefacts to per-repo `.gitignore` files.
+
+Looking ahead to `v0.9.0` (Issue `#5`), the plan is to let `gemtop` track live Antigravity usage alongside proxied API traffic via a passive `-watch-antigravity` tailer reading documented `transcript.jsonl` files (`input_tokens`, `cache_read_tokens`, `output_tokens`) across Gemini and Claude sessions — zero dependencies, no process scraping, and no synchronous hook overhead.
+
+## Takeaways
+
+- **Make build tooling earn its keep:** On a solo, zero-dependency Go repo, Go's native toolchain and local shell aliases beat maintaining a root `Makefile`.
+- **Always smoke-test the built binary against real state:** Every automated test passed for `v0.8.4`, yet running the real binary immediately exposed stale previous-day models persisting across restarts.
+- **Private repos don't need paid GitHub Advanced Security for real security gates:** `govulncheck`, `gosec`, and `gitleaks` on a lightweight `ubuntu-latest` workflow cover vulnerability, static analysis, and secret scanning for free.
+- **Clear actions must reset persisted state, not just memory:** A TUI reset (`[c]`) feels broken unless it clears tracked models, flushes to disk immediately, and pairs with clean day-rollover pruning on startup.
+- **GitHub keeps SSH Authentication Keys and Signing Keys separate:** SSH-signed commits stay `Unverified` (`unknown_key`) until you also register the key under Signing Keys — doing so retroactively flips past commits and tags to green.

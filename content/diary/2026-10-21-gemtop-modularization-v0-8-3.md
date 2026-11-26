@@ -1,94 +1,56 @@
 ---
-title: "gemtop v0.8.3: Monolith Decomposition, Go 1.22 ReverseProxy & Standard Go Layout"
+title: "gemtop v0.8.3: Splitting the Monolith & Standard Go Layout"
 slug: "gemtop-modularization-v0-8-3"
 date: 2026-10-21T04:22:00+01:00
-draft: true
+draft: false
 categories: ["Diary"]
 tags: ["gemtop", "golang", "architecture", "ci", "reverse-proxy"]
-summary: "Decomposing a 2,240-line Go monolith into Standard Go Project Layout, modernising to Go 1.22 ProxyRequest.Rewrite, adding fsync durability, and releasing v0.8.3."
+summary: "Breaking a 2,240-line Go monolith into Standard Go Project Layout, moving to Go 1.22 ProxyRequest.Rewrite, adding fsync durability, and releasing v0.8.3."
 ---
 
-**Project:** `gemtop` (`v0.8.3`)  
-**Focus:** Monolith Decomposition, Reverse Proxy Modernisation, Standard Go Layout (`cmd/`, `internal/`, `test/`), & SemVer `v0.8.3` Release
+A major structural refactoring session for `gemtop`, culminating in `v0.8.3`. The goal was to break apart a single 2,240-line `main.go` before it became painful to maintain, modernise the reverse proxy pipeline to Go 1.22+, harden disk writes, and clean up CI for a zero-dependency Go build.
 
----
+## Disk Durability & Longer Timeouts
 
-## 1. Storage Durability & Extended Timeout Handling
+Two reliability gaps stood out before touching the architecture. First, atomic `os.Rename` writes on macOS (APFS) and Linux (ext4) can still leave zero-byte or corrupted files after an abrupt crash or power loss if the temporary file isn't flushed to physical storage first. Second, deep-thinking Gemini models occasionally ran past the default 30-second response header deadline.
 
-* **The Problem:** On macOS (APFS) and Linux (ext4), sudden process termination or power interruptions during atomic `os.Rename` operations risked leaving zero-byte or corrupted state files on disk. Additionally, deep-thinking Gemini models occasionally timed out on default 30-second response deadlines.
-* **The Solution:**
-  * Added `tmp.Sync()` before `os.Rename` across all configuration and state persistence routines (`SaveAppConfig` and `SaveDiskState`) to guarantee physical disk writes.
-  * Increased default upstream response header timeout from 30s to 60s, added a configurable `timeout_seconds` setting in `~/.gemtop.json`, and exposed the `-timeout` CLI flag.
+To tighten both up, I added `tmp.Sync()` before `os.Rename` across `SaveAppConfig` and `SaveDiskState`, raised the default upstream response header timeout from 30s to 60s, and exposed it via `timeout_seconds` in `~/.gemtop.json` and a `-timeout` CLI flag.
 
----
+## Splitting the 2,240-Line Monolith
 
-## 2. Decomposing the Monolithic Composition Root
+`main.go` had grown into a single compilation unit coupling CLI parsing, HTTP proxying, rate tracking, POSIX terminal controls, and ANSI TUI rendering, leaving 14 files sitting flat in the repository root with no compiler-enforced boundaries.
 
-* **The Problem:** `main.go` had grown into a 2,240-line monolithic file coupling CLI parsing, HTTP reverse proxying, sliding-window rate tracking, POSIX terminal manipulation, and ANSI TUI rendering into a single compilation unit.
-* **The Solution:**
-  * Decomposed the monolith into cohesive domain packages:
-    * **`config`** — Embedded defaults, JSON user overlay (`~/.gemtop.json`), model drift detector, and secure POSIX permission enforcement (`0600`).
-    * **`proxy`** — Modern reverse proxy engine, circular 64 KB tail tap for trailing `usageMetadata`, route extractor, and origin/host CSRF guards.
-    * **`stats`** — Rolling 60s windows (RPM/TPM), 5m churn metrics, Pacific midnight rollover, and atomic disk persistence with `fsync`.
-    * **`terminal`** — POSIX `TIOCGWINSZ` terminal sizing, alternate screen buffer controls, ANSI/C1/Bidi injection shielding, and panic recovery hooks.
-    * **`tui`** — Monospace box drawing maths, WCAG accessible status badges, Unicode sparklines, and interactive keypress navigation.
-    * **`cmd/gemtop`** — Minimal composition root wiring CLI flags, dual-stack loopback listen, signal handling, and server lifecycle.
+I broke it up using the **Standard Go Project Layout** (`cmd/`, `internal/`, `test/`):
 
----
+- **`cmd/gemtop/`** — Minimal composition root handling CLI flags, dual-stack loopback listening, signal handling, and server lifecycle.
+- **`internal/config`** — Embedded defaults, `~/.gemtop.json` user overlay, model drift detector, and `0600` permission enforcement.
+- **`internal/proxy`** — Reverse proxy engine, 64 KB circular tail tap for trailing `usageMetadata`, route extraction, and host/origin CSRF guards.
+- **`internal/stats`** — Rolling 60s windows (RPM/TPM), 5m churn metrics, Pacific midnight rollover, and atomic `fsync`-backed disk persistence.
+- **`internal/terminal`** — POSIX `TIOCGWINSZ` sizing, alternate screen controls, ANSI/C1/Bidi injection shielding, and panic recovery.
+- **`internal/tui`** — Monospace box-drawing layout, WCAG-accessible status badges, Unicode sparklines, and interactive keypress navigation.
+- **`test/`** — Black-box integration tests (`e2e_test.go`), while white-box unit tests stay co-located inside each `internal/<pkg>/`.
 
-## 3. Modernising to Go 1.22 `httputil.ReverseProxy.Rewrite`
+One quick gotcha during the layout move: `.gitignore` had unanchored `gemtop` binary patterns that would have silently matched `cmd/gemtop/`. Anchoring them to the root (`/gemtop`, `/gemtop-*`) solved it cleanly, and CI and release builds were updated to target `./cmd/gemtop`.
 
-* **The Problem:** The legacy `Director` pattern in Go's `httputil.ReverseProxy` is deprecated, susceptible to header spoofing, and awkwardly coupled to global variables.
-* **The Solution:**
-  * Migrated the proxy pipeline to the modern Go 1.22+ `Rewrite: func(r *httputil.ProxyRequest)` API.
-  * Preserved upstream request sanitisation (stripping `Accept-Encoding` for raw streaming inspection) and dynamically injected ambient API keys (`GEMINI_API_KEY`) for verified local loopback requests.
+## Modernising to `ProxyRequest.Rewrite`
 
----
+Go's legacy `httputil.ReverseProxy.Director` hook is deprecated, prone to header spoofing, and awkwardly tied to package globals. I migrated the proxy pipeline to Go 1.22+'s `Rewrite: func(r *httputil.ProxyRequest)` API while keeping upstream request sanitisation intact — stripping `Accept-Encoding` so the stream tap can inspect raw responses, and injecting ambient `GEMINI_API_KEY` credentials only for verified local loopback requests.
 
-## 4. CI Workflow Optimisation for Zero-Dependency Builds
+## Decoupled Telemetry & Immediate EOF Accounting
 
-* **The Problem:** GitHub Actions runners reported `Restore cache failed: Dependencies file is not found` looking for `go.sum` across macOS and Ubuntu matrix jobs.
-* **The Solution:**
-  * Because `gemtop` strictly uses 100% Go Standard Library with zero third-party dependencies (`CGO_ENABLED=0`), no `go.sum` file exists or is needed.
-  * Added `cache: false` to `actions/setup-go` in both `.github/workflows/ci.yml` and `.github/workflows/release.yml`, eliminating runner warnings and accelerating CI execution.
+Two transport-layer rough edges came out during the split. In `-plain` screen-reader mode, logging created unnecessary coupling between the proxy transport and terminal presentation. Meanwhile, on HTTP keep-alive connections, response metrics weren't finalised until the underlying TCP socket closed.
 
----
+Introducing a thread-safe `OnCompletion` callback on `stats.GatewayState` cleanly separated presentation from transport, and updating the 64 KB tail tap in `internal/proxy` to finalise accounting as soon as it sees `io.EOF` ensured metrics update immediately without waiting for connection teardown.
 
-## 5. Standard Go Project Layout Refactoring (`cmd/`, `internal/`, `test/`)
+## Zero-Dependency CI & SemVer `v0.8.3`
 
-* **The Problem:** The repository root was cluttered with 14 source and test files, making project navigation cumbersome and failing to enforce compiler-level visibility boundaries.
-* **The Solution:**
-  * Adopted the **Standard Go Project Layout**:
-    * `cmd/gemtop/` — Houses the composition root and CLI binary entrypoint (`main.go`, `main_test.go`).
-    * `internal/` — Encapsulates domain packages (`config`, `proxy`, `stats`, `terminal`, `tui`) with private access rules enforced by the Go compiler.
-    * `test/` — Dedicated home for black-box integration tests (`e2e_test.go`).
-  * **Test Architecture Philosophy:** Unit tests remain co-located inside `internal/<pkg>/` to preserve white-box testing fidelity, while higher-level system tests reside outside `internal/`.
-  * Anchored `.gitignore` binary patterns (`/gemtop`, `/gemtop-*`) to the root directory to prevent accidental filtering of `cmd/gemtop/`.
-  * Updated CI and release workflows to compile `./cmd/gemtop`.
+GitHub Actions runners were emitting `Restore cache failed: Dependencies file is not found` warnings because `actions/setup-go` looked for a `go.sum` file by default. Since `gemtop` uses 100% Go standard library with `CGO_ENABLED=0` and zero third-party dependencies, no `go.sum` exists. Setting `cache: false` in both `.github/workflows/ci.yml` and `.github/workflows/release.yml` silenced the warning and sped up runs.
 
----
+Because tag `v0.8.2` had already been cut on the pre-refactor layout and this restructuring preserved full backwards compatibility, SemVer 2.0.0 called for a patch bump to **`v0.8.3`**. I updated version constants, banners, `SPECIFICATION.md`, and docs, verified all 7 packages passed with `go test -v -race ./...`, `go vet ./...`, `gofmt -l .`, and `go build -ldflags="-s -w" -o gemtop ./cmd/gemtop`, then merged to `main` and pushed signed tag `v0.8.3`.
 
-## 6. Decoupled Telemetry & Stream Tap Hardening
+## Takeaways
 
-* **The Problem:** Logging in `-plain` screen-reader mode created an awkward dependency coupling between transport internals and terminal presentation. Furthermore, on keep-alive HTTP connections, response streams did not immediately finalise metrics until the connection closed.
-* **The Solution:**
-  * Introduced thread-safe `OnCompletion` callback hooks in `stats.GatewayState`, cleanly decoupling presentation from transport.
-  * Hardened the 64 KB tail tap in `internal/proxy` to finalise accounting immediately upon `io.EOF`, guaranteeing instant metric updates without waiting for TCP socket teardown.
-
----
-
-## 7. SemVer Standardisation & Release (`v0.8.3`)
-
-* **The Problem:** Git tag `v0.8.2` had already been published on the prior layout commit. In accordance with SemVer 2.0.0, internal structural refactoring with full backwards compatibility calls for a patch increment.
-* **The Solution:**
-  * Bumped version to **`v0.8.3`** across code constants, banners (`v0.8.3-local`), documentation, test assertions, and build instructions.
-  * Updated `SPECIFICATION.md` (Section 15) documenting the layout migration and architecture.
-  * Merged into `development` and `main`, and pushed signed tag `v0.8.3` to trigger automated multi-architecture binary releases.
-
----
-
-## 8. Verification & Release Status
-
-* **Test Suite:** 100% PASS across all 7 packages with zero race conditions (`go test -v -race ./...`).
-* **Quality Gates:** `go vet ./...` & `gofmt -l .` 100% compliant with zero diagnostics.
-* **Build Verification:** `go build -ldflags="-s -w" -o gemtop ./cmd/gemtop` compiles cleanly (`gemtop v0.8.3`).
+- **2,000+ lines in one file is hard to maintain:** Letting `main.go` grow to 2,240 lines made navigation and changes unnecessarily fragile — splitting early into focused packages pays off quickly.
+- **Default HTTP timeouts are too tight for reasoning models:** Standard 30-second response header deadlines cut off deep-thinking model calls; raising the default to 60s and exposing a flag and config option avoids silent failures.
+- **Co-locate white-box tests, isolate black-box tests:** Keeping unit tests inside `internal/<pkg>/` preserves white-box access while placing integration tests outside `internal/` validates the real boundary.
+- **Set `cache: false` in `actions/setup-go` for stdlib-only repos:** Zero-dependency Go projects have no `go.sum`; turning off dependency caching eliminates runner warnings and trims CI time.
